@@ -1,0 +1,537 @@
+<!-- public/index.html -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chord Blocks (Server Analyze)</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 24px; }
+    .row { display:flex; gap:16px; flex-wrap:wrap; align-items:end; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; max-width: 1100px; }
+    .muted { color:#666; }
+    button { padding: 8px 12px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    input[type="file"], input[type="number"], input[type="text"] { border: 1px solid #ddd; padding: 8px; border-radius: 10px; }
+    label { display:block; font-size:12px; color:#666; margin-bottom:6px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+    .spinner {
+      display:inline-block;
+      width:14px; height:14px;
+      border:2px solid #ccc;
+      border-top-color:#222;
+      border-radius:50%;
+      animation: spin .8s linear infinite;
+      vertical-align: -2px;
+      margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* chord blocks grid */
+    .scoreWrap { margin-top: 16px; }
+    .scoreGrid {
+      display: grid;
+      grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+      gap: 10px;
+    }
+    .chordCell {
+      border: 1px solid #eee;
+      border-radius: 12px;
+      padding: 10px;
+      min-height: 64px;
+      display:flex;
+      flex-direction:column;
+      justify-content:space-between;
+      background: #fff;
+      transition: transform .08s ease, border-color .08s ease, background .08s ease;
+    }
+    .topRow { display:flex; justify-content:space-between; gap:10px; align-items:center; }
+    .idx { font-size: 12px; color:#666; }
+    .time { font-size: 12px; color:#888; }
+    .label { font-size: 18px; font-weight: 700; line-height: 1.1; }
+    .sub { font-size: 12px; color:#666; }
+    .chordCell.current {
+      border-color: #222;
+      background: #f3f3f3;
+      transform: translateY(-1px);
+    }
+
+    /* floating panel */
+    .floatPanel {
+      position: fixed;
+      right: 16px;
+      top: 16px;
+      width: 320px;
+      border: 1px solid #ddd;
+      border-radius: 14px;
+      padding: 12px;
+      background: rgba(255,255,255,.92);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 8px 24px rgba(0,0,0,.08);
+      z-index: 9999;
+    }
+    .floatTitle { font-weight: 700; margin-bottom: 8px; }
+    .toggleRow { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .switch {
+      width: 44px; height: 26px; border-radius: 999px;
+      border: 1px solid #ccc; background: #eee; position: relative;
+      cursor: pointer; flex: 0 0 auto;
+    }
+    .switch::after {
+      content:""; position:absolute; top: 3px; left: 3px;
+      width: 20px; height: 20px; border-radius: 50%;
+      background: #fff; border: 1px solid #ddd;
+      transition: transform .12s ease;
+    }
+    .switch.on { background:#222; border-color:#222; }
+    .switch.on::after { transform: translateX(18px); }
+    .smallBtnRow { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+    .smallBtnRow button { padding: 6px 10px; border-radius: 10px; }
+    .nextBox { margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px; }
+    .nextItem { border: 1px solid #eee; border-radius: 10px; padding: 8px 10px; margin-top: 8px; display:flex; justify-content:space-between; gap:12px; }
+    .nextLabel { font-weight: 700; }
+  </style>
+</head>
+
+<body>
+  <h1 style="margin:0 0 10px;">Chord Blocks (Server Analyze)</h1>
+  <div class="muted" style="margin-bottom:16px;">
+    选择音频 → Convert（转圈）→ 后端生成 lab → 自动下载 [audio]_ct.lab → 立刻渲染 chord blocks → 播放按 timecode 高亮
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Audio (mp3/wav)</label>
+        <input id="audioFile" type="file" accept="audio/*" />
+      </div>
+      <div>
+        <label>API Base</label>
+        <input id="apiBase" type="text" value="http://127.0.0.1:8710" style="width:260px;" />
+      </div>
+      <div>
+        <label>每行格子数</label>
+        <input id="cols" type="number" min="1" max="16" step="1" value="4" />
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button id="convertBtn" disabled>Convert</button>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;">
+      <audio id="player" controls style="width:100%;"></audio>
+    </div>
+
+    <div class="scoreWrap">
+      <div class="muted">Chord Sequence</div>
+      <div id="scoreGrid" class="scoreGrid" style="--cols:4;"></div>
+    </div>
+
+    <div style="margin-top:16px;" class="muted mono">
+      t=<span id="tNow">0.000</span>s · chordIdx=<span id="idxNow">-</span>/<span id="idxTotal">0</span>
+    </div>
+  </div>
+
+  <div class="floatPanel">
+    <div class="floatTitle">Follow</div>
+    <div class="toggleRow">
+      <div class="muted">自动跟随当前和弦</div>
+      <div id="followSwitch" class="switch on" role="switch" aria-checked="true" tabindex="0"></div>
+    </div>
+
+    <div class="smallBtnRow">
+      <button id="jumpBtn" type="button">Jump</button>
+      <button id="prevBtn" type="button">Prev</button>
+      <button id="nextBtn" type="button">Next</button>
+    </div>
+
+    <div class="nextBox">
+      <div class="muted">Now</div>
+      <div id="nowLabel" style="font-size:22px; font-weight:800; margin-top:4px;">—</div>
+      <div class="muted" style="margin-top:10px;">Next 3</div>
+      <div id="nextList"></div>
+    </div>
+  </div>
+
+  <script>
+    // =========================
+    // Debug utilities
+    // =========================
+    const DEBUG = true;
+    const DBG_TAG = "[ChordUI]";
+
+    function dbg(...args) { if (DEBUG) console.log(DBG_TAG, ...args); }
+    function dbgw(...args) { if (DEBUG) console.warn(DBG_TAG, ...args); }
+    function dbge(...args) { if (DEBUG) console.error(DBG_TAG, ...args); }
+
+    function nowIso() { return new Date().toISOString(); }
+
+    // Capture uncaught errors to console (helps when something silently fails)
+    window.addEventListener("error", (e) => {
+      dbge("window.error", { message: e.message, filename: e.filename, lineno: e.lineno, colno: e.colno, error: e.error });
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      dbge("unhandledrejection", e.reason);
+    });
+
+    dbg("page loaded", { time: nowIso(), userAgent: navigator.userAgent });
+
+    // ===== state =====
+    let events = [];
+    let rafId = null;
+    let currentIdx = -1;
+    let followEnabled = true;
+
+    // ===== elements =====
+    const audioFile = document.getElementById('audioFile');
+    const apiBase = document.getElementById('apiBase');
+    const colsEl = document.getElementById('cols');
+    const convertBtn = document.getElementById('convertBtn');
+
+    const player = document.getElementById('player');
+    const scoreGrid = document.getElementById('scoreGrid');
+
+    const tNow = document.getElementById('tNow');
+    const idxNow = document.getElementById('idxNow');
+    const idxTotal = document.getElementById('idxTotal');
+
+    const followSwitch = document.getElementById('followSwitch');
+    const jumpBtn = document.getElementById('jumpBtn');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+
+    const nowLabel = document.getElementById('nowLabel');
+    const nextList = document.getElementById('nextList');
+
+    // ===== helpers =====
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
+    }
+
+    function parseLab(text) {
+      const t0 = performance.now();
+      const lines = String(text || "").split(/\r?\n/);
+      const out = [];
+      let skipped = 0;
+
+      for (const line of lines) {
+        const s = line.trim();
+        if (!s || s.startsWith('#')) continue;
+        const parts = s.split(/\s+/);
+        if (parts.length < 3) { skipped++; continue; }
+        const start = Number(parts[0]);
+        const end = Number(parts[1]);
+        const label = parts.slice(2).join(' ');
+        if (Number.isFinite(start) && Number.isFinite(end)) out.push({ start, end, label });
+        else skipped++;
+      }
+
+      out.sort((a,b)=>a.start-b.start);
+
+      const t1 = performance.now();
+      dbg("parseLab done", { lines: lines.length, events: out.length, skipped, ms: +(t1 - t0).toFixed(2) });
+      if (out.length) dbg("parseLab sample", out.slice(0, Math.min(5, out.length)));
+      return out;
+    }
+
+    // strict: start <= t < end
+    function findEventIndexStrict(t) {
+      if (!events.length) return -1;
+      if (t < events[0].start) return -1;
+
+      let lo = 0, hi = events.length - 1, ans = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (events[mid].start <= t) { ans = mid; lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      const e = events[ans];
+      return (t >= e.start && t < e.end) ? ans : -1;
+    }
+
+    function setConverting(isOn) {
+      dbg("setConverting", isOn);
+      if (isOn) {
+        convertBtn.disabled = true;
+        convertBtn.dataset.oldText = convertBtn.textContent;
+        convertBtn.innerHTML = '<span class="spinner"></span>Converting';
+      } else {
+        convertBtn.textContent = convertBtn.dataset.oldText || "Convert";
+        convertBtn.disabled = !audioFile.files?.length;
+      }
+    }
+
+    function downloadLab(labText, audioFileName) {
+      const base = (audioFileName || "audio").replace(/\.[^/.]+$/, "");
+      const outName = `${base}_ct.lab`;
+      dbg("downloadLab", { outName, bytes: labText?.length ?? 0 });
+
+      const blob = new Blob([labText], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = outName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      // revoke a bit later to avoid edge timing issues
+      setTimeout(() => URL.revokeObjectURL(url), 250);
+    }
+
+    // prevent leaking too many object URLs
+    let audioObjectUrl = null;
+    function setAudioFromFile(file, reason) {
+      if (!file) return;
+      if (audioObjectUrl) URL.revokeObjectURL(audioObjectUrl);
+      audioObjectUrl = URL.createObjectURL(file);
+      player.src = audioObjectUrl;
+      dbg("audio src set", { reason, name: file.name, size: file.size, type: file.type, objectURL: audioObjectUrl });
+    }
+
+    // ===== UI render =====
+    function renderGrid() {
+      const t0 = performance.now();
+      const cols = Math.max(1, Number(colsEl.value) || 4);
+      scoreGrid.style.setProperty('--cols', String(cols));
+
+      scoreGrid.innerHTML = events.map((e, i) => `
+        <div class="chordCell" data-idx="${i}">
+          <div class="topRow">
+            <div class="idx">#${i+1}</div>
+            <div class="time mono" title="${e.start.toFixed(3)}–${e.end.toFixed(3)}s">${e.start.toFixed(2)}s</div>
+          </div>
+          <div class="label">${escapeHtml(e.label)}</div>
+          <div class="sub mono">${e.start.toFixed(3)}–${e.end.toFixed(3)}</div>
+        </div>
+      `).join('');
+
+      idxTotal.textContent = String(events.length);
+      setCurrentIndex(-1, false);
+
+      // click to seek
+      scoreGrid.querySelectorAll('.chordCell').forEach(el => {
+        el.addEventListener('click', () => {
+          const i = Number(el.dataset.idx);
+          if (!Number.isFinite(i) || !events[i]) return;
+          dbg("cell click -> seek", { idx: i, t: events[i].start });
+          player.currentTime = Math.max(0, events[i].start + 1e-3);
+          player.play().catch(err => dbgw("player.play rejected", err));
+        });
+      });
+
+      const t1 = performance.now();
+      dbg("renderGrid done", { cols, cells: events.length, ms: +(t1 - t0).toFixed(2) });
+    }
+
+    function renderNowNext(idx) {
+      if (idx < 0) {
+        nowLabel.textContent = 'N';
+        nextList.innerHTML = '';
+        return;
+      }
+
+      nowLabel.textContent = events[idx]?.label ?? 'N';
+
+      const next = [];
+      for (let k = 1; k <= 3; k++) {
+        const j = idx + k;
+        if (j < events.length) next.push({ i:j, ...events[j] });
+      }
+
+      nextList.innerHTML = next.map(e => `
+        <div class="nextItem">
+          <div class="mono">${e.start.toFixed(2)}–${e.end.toFixed(2)}</div>
+          <div class="nextLabel">${escapeHtml(e.label)}</div>
+        </div>
+      `).join('');
+    }
+
+    function setCurrentIndex(idx, doFollow=true) {
+      if (idx === currentIdx) return;
+
+      if (currentIdx >= 0) {
+        const oldEl = scoreGrid.querySelector(`.chordCell[data-idx="${currentIdx}"]`);
+        if (oldEl) oldEl.classList.remove('current');
+      }
+
+      const prev = currentIdx;
+      currentIdx = idx;
+      idxNow.textContent = (idx >= 0) ? String(idx+1) : '-';
+      renderNowNext(idx);
+
+      if (currentIdx >= 0) {
+        const el = scoreGrid.querySelector(`.chordCell[data-idx="${currentIdx}"]`);
+        if (el) {
+          el.classList.add('current');
+          if (doFollow && followEnabled) {
+            el.scrollIntoView({ block:'center', inline:'nearest' });
+          }
+        }
+      }
+
+      dbg("currentIdx changed", { from: prev, to: currentIdx, label: currentIdx>=0 ? events[currentIdx]?.label : "N" });
+    }
+
+    // ===== playback sync =====
+    function tick() {
+      const t = player.currentTime || 0;
+      tNow.textContent = t.toFixed(3);
+      setCurrentIndex(findEventIndexStrict(t), true);
+      rafId = requestAnimationFrame(tick);
+    }
+    function startTicking() {
+      dbg("startTicking");
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(tick);
+    }
+    function stopTicking() {
+      dbg("stopTicking");
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+
+    // ===== floating controls =====
+    function setFollowUI() {
+      followSwitch.classList.toggle('on', followEnabled);
+      followSwitch.setAttribute('aria-checked', String(followEnabled));
+      dbg("followEnabled", followEnabled);
+    }
+    function toggleFollow() { followEnabled = !followEnabled; setFollowUI(); }
+
+    followSwitch.addEventListener('click', toggleFollow);
+    followSwitch.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleFollow(); }
+    });
+    setFollowUI();
+
+    function jumpToCurrent() {
+      dbg("jumpToCurrent", currentIdx);
+      if (currentIdx < 0) return;
+      const el = scoreGrid.querySelector(`.chordCell[data-idx="${currentIdx}"]`);
+      if (el) el.scrollIntoView({ block:'center', inline:'nearest' });
+    }
+    jumpBtn.addEventListener('click', jumpToCurrent);
+
+    prevBtn.addEventListener('click', () => {
+      if (!events.length) return;
+      const i = Math.max(0, (currentIdx >= 0 ? currentIdx : 0) - 1);
+      if (!events[i]) return;
+      dbg("prev -> seek", { idx: i, t: events[i].start });
+      player.currentTime = Math.max(0, events[i].start + 1e-3);
+      player.play().catch(err => dbgw("player.play rejected", err));
+    });
+
+    nextBtn.addEventListener('click', () => {
+      if (!events.length) return;
+      const i = Math.min(events.length - 1, (currentIdx >= 0 ? currentIdx : -1) + 1);
+      if (!events[i]) return;
+      dbg("next -> seek", { idx: i, t: events[i].start });
+      player.currentTime = Math.max(0, events[i].start + 1e-3);
+      player.play().catch(err => dbgw("player.play rejected", err));
+    });
+
+    // ===== main convert =====
+    async function convert() {
+      const file = audioFile.files?.[0];
+      if (!file) return;
+
+      dbg("convert clicked", { name: file.name, size: file.size, type: file.type, apiBase: apiBase.value });
+
+      setConverting(true);
+
+      const url = apiBase.value.replace(/\/+$/, '') + "/analyze";
+      const fd = new FormData();
+      fd.append("file", file);
+
+      let resp;
+      let data;
+      const t0 = performance.now();
+
+      try {
+        dbg("fetch start", { url });
+        resp = await fetch(url, { method: "POST", body: fd });
+        dbg("fetch response", { status: resp.status, ok: resp.ok });
+
+        // Read as text first for better debug (server might return HTML)
+        const raw = await resp.text();
+        dbg("fetch raw length", raw.length);
+        dbg("fetch raw head", raw.slice(0, 300));
+
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          setConverting(false);
+          dbge("JSON parse failed (server did not return JSON)", e);
+          alert("Server did not return JSON. Check console.\n\n" + raw.slice(0, 400));
+          return;
+        }
+      } catch (e) {
+        setConverting(false);
+        dbge("fetch/network error", e);
+        alert("Network error. Check console.");
+        return;
+      } finally {
+        const t1 = performance.now();
+        dbg("convert request finished", { ms: +(t1 - t0).toFixed(2) });
+      }
+
+      if (!data.ok) {
+        setConverting(false);
+        dbge("convert failed payload", data);
+        alert("Convert failed:\n" + (data.stderr || data.stdout || data.detail || "unknown"));
+        return;
+      }
+
+      const labText = data.lab;
+      dbg("convert ok", { duration_sec: data.duration_sec, lab_chars: labText?.length ?? 0 });
+
+      // 1) download output lab
+      downloadLab(labText, file.name);
+
+      // 2) render immediately from returned lab text
+      events = parseLab(labText);
+      renderGrid();
+      renderNowNext(-1);
+
+      // 3) ensure audio is playable (local)
+      setAudioFromFile(file, "after convert");
+
+      // 4) activate sync (avoid duplicate listeners)
+      player.onplay = startTicking;
+      player.onpause = stopTicking;
+      player.onended = stopTicking;
+      player.onseeked = () => {
+        const t = player.currentTime || 0;
+        dbg("seeked", { t });
+        setCurrentIndex(findEventIndexStrict(t), false);
+      };
+
+      setConverting(false);
+
+      player.play().catch(err => dbgw("player.play rejected", err));
+      startTicking();
+    }
+
+    // ===== events =====
+    colsEl.addEventListener('change', () => {
+      dbg("cols changed", colsEl.value);
+      if (events.length) renderGrid();
+    });
+
+    convertBtn.addEventListener('click', convert);
+
+    audioFile.addEventListener('change', () => {
+      const file = audioFile.files?.[0] || null;
+      convertBtn.disabled = !file;
+      dbg("audioFile changed", file ? { name: file.name, size: file.size, type: file.type } : null);
+      if (file) setAudioFromFile(file, "file change");
+    });
+  </script>
+</body>
+</html>

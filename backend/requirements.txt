@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn>=0.23
+python-multipart>=0.0.6
+
+# Notes:
+# - Avoid uvicorn[standard] to prevent uvloop/httptools C-extension crashes on some macOS/conda setups.
+# - Keep this list focused on Web API deps; avoid forcing scientific stack upgrades via pip.
